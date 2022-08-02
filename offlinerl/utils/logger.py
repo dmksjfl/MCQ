@@ -1,6 +1,5 @@
 import os
 import uuid
-import aim
 
 from offlinerl.utils.io import create_dir
 
