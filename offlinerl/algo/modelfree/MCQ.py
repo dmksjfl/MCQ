@@ -3,6 +3,7 @@ import copy
 import torch
 import numpy as np
 from torch import nn
+import torch.nn.functional as F
 from torch import optim
 from loguru import logger
 from torch.distributions import Normal, kl_divergence
@@ -168,7 +169,7 @@ class AlgoTrainer(BaseAlgo):
 
         self.lam = args['lam']
         self.num = args['num']
-        self.normalize = False
+        self.normalize = args['normalize'] # ought to be True or False
         
         self._n_train_steps_total = 0
         self._current_epoch = 0
@@ -212,13 +213,13 @@ class AlgoTrainer(BaseAlgo):
             repeat_actions, _ = self.forward(obs_repeat, reparameterize=True, return_log_prob=True)
             preds = network(obs_repeat, repeat_actions)
         else:
-            pesudo_action = vae.decode_multiple(obs, num=self.num)
+            # pesudo_action = vae.decode_multiple(obs, num=self.num)
+            pesudo_action = vae.decode(obs_repeat)
             pesudo_action = pesudo_action.reshape(self.num*self.args["batch_size"], -1)
             preds = network(obs_repeat, pesudo_action)
             preds = preds.reshape(self.num, obs.shape[0], 1)
             preds = torch.max(preds, dim=0)[0]
             preds = preds.repeat((self.num,1,1)).reshape(-1,1)
-
         return preds
         
     def _train(self, batch, tblogger):
@@ -229,10 +230,10 @@ class AlgoTrainer(BaseAlgo):
         obs = batch.obs
         actions = batch.act
         next_obs = batch.obs_next
-
+        
         ## normalization
-        obs = (obs - self.mean)/self.std
-        next_obs = (next_obs - self.mean)/self.std
+        obs = (obs - self.mean)/(self.std + 1e-6)
+        next_obs = (next_obs - self.mean)/(self.std + 1e-6)
 
         # train vae
         dist, _action = self.vae(obs, actions)
@@ -303,8 +304,17 @@ class AlgoTrainer(BaseAlgo):
 
         assert pesudo_q2_target.shape[0] == q2_ood_pred.shape[0]
 
-        qf1_loss = self.lam * self.critic_criterion(q1_pred, q_target) + (1-self.lam) * self.critic_criterion(q1_ood_pred, pesudo_q_target)
-        qf2_loss = self.lam * self.critic_criterion(q2_pred, q_target) + (1-self.lam) * self.critic_criterion(q2_ood_pred, pesudo_q_target)
+        # stop vanilla pessimistic estimate becoming large
+        qf1_deviation = q1_ood_pred - pesudo_q_target
+        qf1_deviation[qf1_deviation <= 0] = 0
+        qf1_ood_loss = torch.mean(qf1_deviation**2)
+
+        qf2_deviation = q2_ood_pred - pesudo_q_target
+        qf2_deviation[qf2_deviation <= 0] = 0
+        qf2_ood_loss = torch.mean(qf2_deviation**2)
+
+        qf1_loss = self.lam * self.critic_criterion(q1_pred, q_target) + (1-self.lam) * qf1_ood_loss
+        qf2_loss = self.lam * self.critic_criterion(q2_pred, q_target) + (1-self.lam) * qf2_ood_loss
 
         """
         Update critic networks
@@ -317,14 +327,13 @@ class AlgoTrainer(BaseAlgo):
         qf2_loss.backward()
         self.critic2_opt.step()
 
-        tblogger.log('train/q1', q1_pred.mean(), self._current_epoch)
-        tblogger.log('train/q2', q2_pred.mean(), self._current_epoch)
-        tblogger.log('train/q target', q_target.mean(), self._current_epoch)
-        tblogger.log('train/q1 ood', q1_ood_pred.mean(), self._current_epoch)
-        tblogger.log('train/q2 ood', q2_ood_pred.mean(), self._current_epoch)
-        tblogger.log('train/q ood target', pesudo_q_target.mean(), self._current_epoch)
-        tblogger.log('train/q1 critic loss', qf1_loss, self._current_epoch)
-        tblogger.log('train/q2 critic loss', qf2_loss, self._current_epoch)
+        if self._current_epoch % 500 == 0:
+            tblogger.log('train/q1', q1_pred.mean(), self._current_epoch)
+            tblogger.log('train/q target', q_target.mean(), self._current_epoch)
+            tblogger.log('train/q1 ood', q1_ood_pred.mean(), self._current_epoch)
+            tblogger.log('train/q ood target', pesudo_q_target.mean(), self._current_epoch)
+            tblogger.log('train/q1 critic loss', qf1_loss, self._current_epoch)
+            # tblogger.log('train/q2 critic loss', qf2_loss, self._current_epoch)
 
         q_new_actions = torch.min(
             self.critic1(obs, new_obs_actions),
@@ -336,8 +345,9 @@ class AlgoTrainer(BaseAlgo):
         policy_loss.backward()
         self.actor_opt.step()
 
-        tblogger.log('train/actor q', q_new_actions.mean(), self._current_epoch)
-        tblogger.log('train/actor loss', policy_loss, self._current_epoch)
+        if self._current_epoch % 500 == 0:
+            tblogger.log('train/actor q', q_new_actions.mean(), self._current_epoch)
+            tblogger.log('train/actor loss', q_new_actions.mean(), self._current_epoch)
 
         """
         Soft Updates target network
@@ -346,9 +356,13 @@ class AlgoTrainer(BaseAlgo):
         self._sync_weight(self.critic2_target, self.critic2, self.args["soft_target_tau"])
         
         self._n_train_steps_total += 1
+
         
     def get_model(self):
         return self.actor
+    
+    #def save_model(self, model_save_path):
+    #    torch.save(self.actor, model_save_path)
         
     def get_policy(self):
         return self.actor
@@ -370,7 +384,7 @@ class AlgoTrainer(BaseAlgo):
             for step in range(1,self.args["steps_per_epoch"]+1):
                 train_data = train_buffer.sample(self.args["batch_size"])
                 self._train(train_data, tblogger)
-            
+               
             if self.normalize:
                 mean = self.mean.cpu().numpy()
                 std = self.std.cpu().numpy()
@@ -379,12 +393,14 @@ class AlgoTrainer(BaseAlgo):
                 std = self.std
             
             res = callback_fn(self.get_policy(), epoch, mean, std)
+            
+            if epoch % 5 == 0:
 
-            self.log_res(epoch, res)
+                self.log_res(epoch, res)
 
-            ## record statistics
-            tblogger.log('eval/d4rl_score', res["score"], epoch)
-            tblogger.log('eval/return', res["Reward_Mean_Env"], epoch)
-            tblogger.log('eval/episode length', res["Length_Mean_Env"], epoch)
+                ## record statistics
+                tblogger.log('eval/d4rl_score', res["score"], epoch)
+                tblogger.log('eval/return', res["Reward_Mean_Env"], epoch)
+                tblogger.log('eval/episode length', res["Length_Mean_Env"], epoch)
             
         return self.get_policy()
