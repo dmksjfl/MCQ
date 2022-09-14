@@ -214,13 +214,13 @@ class AlgoTrainer(BaseAlgo):
             preds = network(obs_repeat, repeat_actions)
         else:
             # pesudo_action = vae.decode_multiple(obs, num=self.num)
-            repeated_actions = vae.decode(obs_repeat)
-            repeated_actions = repeated_actions.reshape(self.num*self.args["batch_size"], -1)
-            preds = network(obs_repeat, repeated_actions)
+            repeat_actions = vae.decode(obs_repeat)
+            repeat_actions = repeat_actions.reshape(self.num*self.args["batch_size"], -1)
+            preds = network(obs_repeat, repeat_actions)
             preds = preds.reshape(self.num, obs.shape[0], 1)
             preds = torch.max(preds, dim=0)[0]
             preds = preds.clamp(min=0).repeat((self.num,1,1)).reshape(-1,1)
-        return preds, repeated_actions.view(self.num, self.args["batch_size"], -1)
+        return preds, repeat_actions.view(self.num, self.args["batch_size"], -1)
         
     def _train(self, batch, tblogger):
         self._current_epoch += 1
