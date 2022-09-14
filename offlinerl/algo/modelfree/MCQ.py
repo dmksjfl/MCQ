@@ -314,10 +314,14 @@ class AlgoTrainer(BaseAlgo):
 
         # stop vanilla pessimistic estimate becoming large
         qf1_deviation = q1_ood_pred - pesudo_q_target
+        
+        # can also be disabled
         if self.task != 'walker2d-medium-replay-v2':
             qf1_deviation[qf1_deviation <= 0] = 0
         
         qf2_deviation = q2_ood_pred - pesudo_q_target
+        
+        # can also be disabled
         if self.task != 'walker2d-medium-replay-v2':
             qf2_deviation[qf2_deviation <= 0] = 0
         
