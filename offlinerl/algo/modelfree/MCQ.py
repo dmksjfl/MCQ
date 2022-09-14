@@ -214,13 +214,13 @@ class AlgoTrainer(BaseAlgo):
             preds = network(obs_repeat, repeat_actions)
         else:
             # pesudo_action = vae.decode_multiple(obs, num=self.num)
-            pesudo_action = vae.decode(obs_repeat)
-            pesudo_action = pesudo_action.reshape(self.num*self.args["batch_size"], -1)
-            preds = network(obs_repeat, pesudo_action)
+            repeated_actions = vae.decode(obs_repeat)
+            repeated_actions = repeated_actions.reshape(self.num*self.args["batch_size"], -1)
+            preds = network(obs_repeat, repeated_actions)
             preds = preds.reshape(self.num, obs.shape[0], 1)
             preds = torch.max(preds, dim=0)[0]
-            preds = preds.repeat((self.num,1,1)).reshape(-1,1)
-        return preds
+            preds = preds.clamp(min=0).repeat((self.num,1,1)).reshape(-1,1)
+        return preds, repeated_actions.view(self.num, self.args["batch_size"], -1)
         
     def _train(self, batch, tblogger):
         self._current_epoch += 1
@@ -278,25 +278,33 @@ class AlgoTrainer(BaseAlgo):
         target_q_values = target_q_values - alpha * new_log_pi
         q_target = self.args["reward_scale"] * rewards + (1. - terminals) * self.args["discount"] * target_q_values.detach()
         
+        def weight(diff):
+            return torch.where(diff>=0.05, 0, 1)
+        
+        pesudo_next_action = self.vae.decode(next_obs)
+        if self.task in ['hopper-medium-v2', 'hopper-medium-expert-v2', 'hopper-expert-v2', 'halfcheetah-medium-expert-v2', 'halfcheetah-expert-v2']:
+            next_action_diff = torch.mean((new_next_actions - pesudo_next_action)**2, dim=-1, keepdim=True)
+            bellman_weight = weight(next_action_diff)
+        
         ## OOD Q1
-        q1_ood_curr_pred = self._get_tensor_values(obs, network=self.critic1)
-        q1_ood_next_pred = self._get_tensor_values(next_obs, network=self.critic1)
+        q1_ood_curr_pred, q1_ood_curr_act = self._get_tensor_values(obs, network=self.critic1)
+        q1_ood_next_pred, q1_ood_next_act = self._get_tensor_values(next_obs, network=self.critic1)
         q1_ood_pred = torch.cat([q1_ood_curr_pred, q1_ood_next_pred],0)
 
-        pesudo_q1_curr_target = self._get_tensor_values(obs, network=self.critic1, vae=self.vae)
-        pesudo_q1_next_target = self._get_tensor_values(next_obs, network=self.critic1, vae=self.vae)
+        pesudo_q1_curr_target, q1_curr_act = self._get_tensor_values(obs, network=self.critic1, vae=self.vae)
+        pesudo_q1_next_target, q1_next_act = self._get_tensor_values(next_obs, network=self.critic1, vae=self.vae)
         pesudo_q1_target = torch.cat([pesudo_q1_curr_target, pesudo_q1_next_target],0)
         pesudo_q1_target = pesudo_q1_target.detach()
 
         assert pesudo_q1_target.shape[0] == q1_ood_pred.shape[0]
 
         ## OOD Q2
-        q2_ood_curr_pred = self._get_tensor_values(obs, network=self.critic2)
-        q2_ood_next_pred = self._get_tensor_values(next_obs, network=self.critic2)
+        q2_ood_curr_pred, q2_ood_curr_act = self._get_tensor_values(obs, network=self.critic2)
+        q2_ood_next_pred, q2_ood_next_act = self._get_tensor_values(next_obs, network=self.critic2)
         q2_ood_pred = torch.cat([q2_ood_curr_pred, q2_ood_next_pred],0)
 
-        pesudo_q2_curr_target = self._get_tensor_values(obs, network=self.critic2, vae=self.vae)
-        pesudo_q2_next_target = self._get_tensor_values(next_obs, network=self.critic2, vae=self.vae)
+        pesudo_q2_curr_target, q2_curr_act = self._get_tensor_values(obs, network=self.critic2, vae=self.vae)
+        pesudo_q2_next_target, q2_next_act = self._get_tensor_values(next_obs, network=self.critic2, vae=self.vae)
         pesudo_q2_target = torch.cat([pesudo_q2_curr_target, pesudo_q2_next_target])
         pesudo_q2_target = pesudo_q2_target.detach()
 
@@ -306,15 +314,32 @@ class AlgoTrainer(BaseAlgo):
 
         # stop vanilla pessimistic estimate becoming large
         qf1_deviation = q1_ood_pred - pesudo_q_target
-        qf1_deviation[qf1_deviation <= 0] = 0
-        qf1_ood_loss = torch.mean(qf1_deviation**2)
-
+        if self.task != 'walker2d-medium-replay-v2':
+            qf1_deviation[qf1_deviation <= 0] = 0
+        
         qf2_deviation = q2_ood_pred - pesudo_q_target
-        qf2_deviation[qf2_deviation <= 0] = 0
-        qf2_ood_loss = torch.mean(qf2_deviation**2)
+        if self.task != 'walker2d-medium-replay-v2':
+            qf2_deviation[qf2_deviation <= 0] = 0
+        
+        if self.task in ['hopper-medium-v2', 'hopper-medium-expert-v2', 'hopper-expert-v2', 'halfcheetah-medium-expert-v2', 'halfcheetah-expert-v2']:
+            # to ensure policy deviation between learned policy and behavior policy is not large (e.g., the assumption in Proposition 5)
+            q1_curr_diff = torch.mean((q1_ood_curr_act - q1_curr_act)**2, dim=-1, keepdim=True)
+            q1_next_diff = torch.mean((q1_ood_next_act - q1_next_act)**2, dim=-1, keepdim=True)
+            q2_curr_diff = torch.mean((q2_ood_curr_act - q2_curr_act)**2, dim=-1, keepdim=True)
+            q2_next_diff = torch.mean((q2_ood_next_act - q2_next_act)**2, dim=-1, keepdim=True)
+            q1_diff = torch.cat([q1_cur_diff, q1_next_diff],0)
+            q2_diff = torch.cat([q2_cur_diff, q2_next_diff],0)
+            q1_weight = 1-weight(q1_diff).view(-1, 1)
+            q2_weight = 1-weight(q2_diff).view(-1, 1)
+            
+            qf1_loss = self.lam * (bellman_weight * (q1_pred - q_target)**2).mean() + (1-self.lam) * (q1_weight * qf1_deviation**2).mean()
+            qf2_loss = self.lam * (bellman_weight * (q2_pred - q_target)**2).mean() + (1-self.lam) * (q2_weight * qf2_deviation**2).mean()
+        else:          
+            qf1_ood_loss = torch.mean(qf1_deviation**2)
+            qf2_ood_loss = torch.mean(qf2_deviation**2)
 
-        qf1_loss = self.lam * self.critic_criterion(q1_pred, q_target) + (1-self.lam) * qf1_ood_loss
-        qf2_loss = self.lam * self.critic_criterion(q2_pred, q_target) + (1-self.lam) * qf2_ood_loss
+            qf1_loss = self.lam * self.critic_criterion(q1_pred, q_target) + (1-self.lam) * qf1_ood_loss
+            qf2_loss = self.lam * self.critic_criterion(q2_pred, q_target) + (1-self.lam) * qf2_ood_loss
 
         """
         Update critic networks
