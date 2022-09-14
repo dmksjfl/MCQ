@@ -19,6 +19,7 @@ vae_step = 200000
 
 ## new add
 log_dir = './logs/MCQ/halfcheetah-medium-v2'
+normalize = False
 
 batch_size = 256
 hidden_layer_size = 400
