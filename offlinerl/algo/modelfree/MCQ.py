@@ -331,8 +331,8 @@ class AlgoTrainer(BaseAlgo):
             q1_next_diff = torch.mean((q1_ood_next_act - q1_next_act)**2, dim=-1, keepdim=True)
             q2_curr_diff = torch.mean((q2_ood_curr_act - q2_curr_act)**2, dim=-1, keepdim=True)
             q2_next_diff = torch.mean((q2_ood_next_act - q2_next_act)**2, dim=-1, keepdim=True)
-            q1_diff = torch.cat([q1_cur_diff, q1_next_diff],0)
-            q2_diff = torch.cat([q2_cur_diff, q2_next_diff],0)
+            q1_diff = torch.cat([q1_curr_diff, q1_next_diff],0)
+            q2_diff = torch.cat([q2_curr_diff, q2_next_diff],0)
             q1_weight = 1-weight(q1_diff).view(-1, 1)
             q2_weight = 1-weight(q2_diff).view(-1, 1)
             
