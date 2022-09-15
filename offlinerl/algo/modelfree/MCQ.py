@@ -279,7 +279,7 @@ class AlgoTrainer(BaseAlgo):
         q_target = self.args["reward_scale"] * rewards + (1. - terminals) * self.args["discount"] * target_q_values.detach()
         
         def weight(diff):
-            return torch.where(diff>=0.05, 0.0, 1.0)
+            return torch.where(diff>=0.05, 0, 1)
         
         ## OOD Q1
         q1_ood_curr_pred, q1_ood_curr_act = self._get_tensor_values(obs, network=self.critic1)
