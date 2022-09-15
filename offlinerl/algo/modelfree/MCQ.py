@@ -279,12 +279,7 @@ class AlgoTrainer(BaseAlgo):
         q_target = self.args["reward_scale"] * rewards + (1. - terminals) * self.args["discount"] * target_q_values.detach()
         
         def weight(diff):
-            return torch.where(diff>=0.05, 0, 1)
-        
-        pesudo_next_action = self.vae.decode(next_obs)
-        if self.task in ['hopper-medium-v2', 'hopper-medium-expert-v2', 'hopper-expert-v2', 'halfcheetah-medium-expert-v2', 'halfcheetah-expert-v2']:
-            next_action_diff = torch.mean((new_next_actions - pesudo_next_action)**2, dim=-1, keepdim=True)
-            bellman_weight = weight(next_action_diff)
+            return torch.where(diff>=0.05, 0.0, 1.0)
         
         ## OOD Q1
         q1_ood_curr_pred, q1_ood_curr_act = self._get_tensor_values(obs, network=self.critic1)
@@ -313,20 +308,12 @@ class AlgoTrainer(BaseAlgo):
         assert pesudo_q2_target.shape[0] == q2_ood_pred.shape[0]
 
         # stop vanilla pessimistic estimate becoming large
-        qf1_deviation = q1_ood_pred - pesudo_q_target
-        
-        # can also be disabled
-        if self.task != 'walker2d-medium-replay-v2':
-            qf1_deviation[qf1_deviation <= 0] = 0
-        
+        qf1_deviation = q1_ood_pred - pesudo_q_target    
         qf2_deviation = q2_ood_pred - pesudo_q_target
-        
-        # can also be disabled
-        if self.task != 'walker2d-medium-replay-v2':
-            qf2_deviation[qf2_deviation <= 0] = 0
         
         if self.task in ['hopper-medium-v2', 'hopper-medium-expert-v2', 'hopper-expert-v2', 'halfcheetah-medium-expert-v2', 'halfcheetah-expert-v2']:
             # to ensure policy deviation between learned policy and behavior policy is not large (e.g., the assumption in Proposition 5)
+            # only OOD actions are assigned fake targets
             q1_curr_diff = torch.mean((q1_ood_curr_act - q1_curr_act)**2, dim=-1, keepdim=True)
             q1_next_diff = torch.mean((q1_ood_next_act - q1_next_act)**2, dim=-1, keepdim=True)
             q2_curr_diff = torch.mean((q2_ood_curr_act - q2_curr_act)**2, dim=-1, keepdim=True)
@@ -336,9 +323,15 @@ class AlgoTrainer(BaseAlgo):
             q1_weight = 1-weight(q1_diff).view(-1, 1)
             q2_weight = 1-weight(q2_diff).view(-1, 1)
             
-            qf1_loss = self.lam * (bellman_weight * (q1_pred - q_target)**2).mean() + (1-self.lam) * (q1_weight * qf1_deviation**2).mean()
-            qf2_loss = self.lam * (bellman_weight * (q2_pred - q_target)**2).mean() + (1-self.lam) * (q2_weight * qf2_deviation**2).mean()
-        else:          
+            qf1_loss = self.lam * (q1_pred - q_target)**2.mean() + (1-self.lam) * (q1_weight * qf1_deviation**2).mean()
+            qf2_loss = self.lam * (q2_pred - q_target)**2.mean() + (1-self.lam) * (q2_weight * qf2_deviation**2).mean()
+        else:
+            # can also be disabled below
+            if self.task != 'walker2d-medium-replay-v2':
+                qf1_deviation[qf1_deviation <= 0] = 0
+                qf2_deviation[qf2_deviation <= 0] = 0
+            # can also be disabled above
+                
             qf1_ood_loss = torch.mean(qf1_deviation**2)
             qf2_ood_loss = torch.mean(qf2_deviation**2)
 
