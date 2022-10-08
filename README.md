@@ -50,7 +50,7 @@ We do welcome the reader to try running with $\alpha$-style update rule.
 
 If you use our method or code in your research, please consider citing the paper as follows:
 ```
-@article{lyu2022mildly,
+@inproceedings{lyu2022mildly,
  title={Mildly Conservative Q-learning for Offline Reinforcement Learning},
  author={Jiafei Lyu and Xiaoteng Ma and Xiu Li and Zongqing Lu},
  booktitle={Thirty-sixth Conference on Neural Information Processing Systems},
