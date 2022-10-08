@@ -30,9 +30,9 @@ For MuJoCo tasks, we conduct experiments on d4rl MuJoCo "-v2" datasets by callin
 python examples/train_d4rl.py --algo_name=MCQ --task d4rl-hopper-medium-replay-v2 --seed 6 --lam 0.9 --log-dir=logs/hopper-medium-replay/r6
 ```
 
-For Adroit/maze2d tasks, we run on  "-v0" datasets by calling
+For Adroit "-v0"/maze2d "-v1" tasks, we run on these datasets by calling
 ```
-python examples/train_d4rl.py --algo_name=MCQ --task d4rl-pen-human-v0 --seed 6 --lam 0.3 --log-dir=logs/pen-human/r6
+python examples/train_d4rl.py --algo_name=MCQ --task d4rl-maze2d-medium-v1 --seed 6 --lam 0.9 --log-dir=logs/maze2d-medium-v1/r6
 ```
 
 The log is stored in the `--log-dir`. One can see the training curve via tensorboard.
