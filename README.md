@@ -8,14 +8,14 @@ To use this codebase, one need to install the following dependencies:
 
 - fire
 - loguru
-- tianshou
+- tianshou==0.4.2
 - gym<=0.18.3
-- mujoco-py
+- mujoco-py==2.0.2.8
 - sklearn
 - gtimer
 - torch==1.8.0
-- d4rl
-- rlkit
+- d4rl==1.1
+- rlkit==0.2.1dev
 
 Once you have all the dependencies installed, run the following command
 
